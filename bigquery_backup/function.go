@@ -47,9 +47,7 @@ type postBodyParams struct {
 	Compression   string `json:"compression_type"`
 }
 
-var lc *logging.Client
 var bc *bigquery.Client
-var lcOnce sync.Once
 var bcOnce sync.Once
 
 func init() {
@@ -69,12 +67,6 @@ func bigQueryBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := context.Background()
 
-	err = backupParams.setLogger(ctx)
-	if err != nil {
-		log.Fatalf("Failed to set logger: %v", err)
-		return
-	}
-
 	err = backupParams.setBigQueryClient(ctx)
 	if err != nil {
 		return
@@ -91,7 +83,7 @@ func bigQueryBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ok, err := backupParams.checkBackupFormat(); !ok || err != nil {
-		err = logError("Problem validating destination format")
+		err = backupParams.logError("Problem validating destination format")
 		if err != nil {
 			return
 		}
@@ -100,7 +92,7 @@ func bigQueryBackup(w http.ResponseWriter, r *http.Request) {
 
 	if ok, err := backupParams.backupBigQueryTable(ctx); !ok {
 		if err != nil {
-			err = logError("Problem backing up BigQuery table")
+			err = backupParams.logError("Problem backing up BigQuery table")
 			if err != nil {
 				return
 			}
@@ -114,7 +106,7 @@ func bigQueryBackup(w http.ResponseWriter, r *http.Request) {
 func (bp *backupParams) backupBigQueryTable(ctx context.Context) (bool, error) {
 	extractor := setupExtractor(bp)
 
-	err := logInfo(fmt.Sprintf("Starting backup of table %s.%s to cloud storage", bp.sourceDatasetID, bp.backupTableID))
+	err := bp.logInfo(fmt.Sprintf("Starting backup of table %s.%s to cloud storage", bp.sourceDatasetID, bp.backupTableID))
 	if err != nil {
 		return false, err
 	}
@@ -137,20 +129,20 @@ func (bp *backupParams) backupBigQueryTable(ctx context.Context) (bool, error) {
 func (bp *backupParams) waitForJob(ctx context.Context, job *bigquery.Job) (bool, error) {
 	status, err := job.Wait(ctx)
 	if err != nil {
-		err := logError(fmt.Sprintf("Error waiting for backup of table %s.%s to cloud storage: %v", bp.sourceDatasetID, bp.backupTableID, err))
+		err := bp.logError(fmt.Sprintf("Error waiting for backup of table %s.%s to cloud storage: %v", bp.sourceDatasetID, bp.backupTableID, err))
 		if err != nil {
 			return false, err
 		}
 		return true, err
 	}
 	if status.Err() != nil {
-		err := logError(fmt.Sprintf("Error backing up table %s.%s to cloud storage: %v", bp.sourceDatasetID, bp.backupTableID, status.Err()))
+		err := bp.logError(fmt.Sprintf("Error backing up table %s.%s to cloud storage: %v", bp.sourceDatasetID, bp.backupTableID, status.Err()))
 		if err != nil {
 			return false, err
 		}
 		return true, err
 	}
-	err = logInfo(fmt.Sprintf("Backup of table %s.%s completed successfully", bp.sourceDatasetID, bp.backupTableID))
+	err = bp.logInfo(fmt.Sprintf("Backup of table %s.%s completed successfully", bp.sourceDatasetID, bp.backupTableID))
 	if err != nil {
 		return false, err
 	}
@@ -162,13 +154,13 @@ func (bp *backupParams) waitForJob(ctx context.Context, job *bigquery.Job) (bool
 func (bp *backupParams) runExtractor(ctx context.Context, extractor *bigquery.Extractor) (*bigquery.Job, error) {
 	job, err := extractor.Run(ctx)
 	if err != nil {
-		err = logError(fmt.Sprintf("Error starting backup of table %s.%s to cloud storage: %v", bp.sourceDatasetID, bp.backupTableID, err))
+		err = bp.logError(fmt.Sprintf("Error starting backup of table %s.%s to cloud storage: %v", bp.sourceDatasetID, bp.backupTableID, err))
 		if err != nil {
 			return nil, err
 		}
 		return nil, err
 	}
-	err = logInfo(fmt.Sprintf("Backup of table %s.%s started successfully, jobID: %s", bp.sourceDatasetID, bp.backupTableID, job.ID()))
+	err = bp.logInfo(fmt.Sprintf("Backup of table %s.%s started successfully, jobID: %s", bp.sourceDatasetID, bp.backupTableID, job.ID()))
 	if err != nil {
 		return nil, err
 	}
@@ -190,21 +182,6 @@ func (bp *backupParams) setProjectID() error {
 	return nil
 }
 
-// setLogger creates a new Logging client for the specified project ID. It uses
-// the lcOnce sync.Once to ensure the client is only created once, and returns
-// any error that occurred during the client creation process.
-func (bp *backupParams) setLogger(ctx context.Context) error {
-	var err error
-	lcOnce.Do(func() {
-		lc, err = logging.NewClient(ctx, bp.projectID)
-		if err != nil {
-			return
-		}
-	})
-	defer lc.Close()
-	return nil
-}
-
 // setBigQueryClient creates a new BigQuery client for the specified project ID.
 // It uses the bcOnce sync.Once to ensure the client is only created once, and
 // returns any error that occurred during the client creation process.
@@ -213,7 +190,7 @@ func (bp *backupParams) setBigQueryClient(ctx context.Context) error {
 	bcOnce.Do(func() {
 		bc, err = bigquery.NewClient(ctx, bp.projectID)
 		if err != nil {
-			err = logError(fmt.Sprintf("Failed to create new BigQuery client: %v", err))
+			err = bp.logError(fmt.Sprintf("Failed to create new BigQuery client: %v", err))
 			if err != nil {
 				return
 			}
@@ -230,20 +207,20 @@ func (bp *backupParams) setBigQueryClient(ctx context.Context) error {
 func (bp *backupParams) handleSetup(r *http.Request) bool {
 	pb, err := decodePostBody(r)
 	if err != nil {
-		_ = logError(fmt.Sprintf("Failed to decode POST body: %v", err))
+		_ = bp.logError(fmt.Sprintf("Failed to decode POST body: %v", err))
 		return true
 	}
 
-	if ok, err := checkPostBody(&pb); !ok || err != nil {
-		_ = logError(fmt.Sprintf("Invalid POST body: %v", err))
+	if ok, err := bp.checkPostBody(&pb); !ok || err != nil {
+		_ = bp.logError(fmt.Sprintf("Invalid POST body: %v", err))
 		return true
 	}
 
 	bp.setBackupParams(pb)
 	p := fmt.Sprintf("Backup params: %s, %s, %s, %s", bp.projectID, bp.sourceDatasetID, bp.backupTableID, bp.storageBucket)
-	err = logInfo(p)
+	err = bp.logInfo(p)
 	if err != nil {
-		_ = logError(fmt.Sprintf("Failed to set backup params: %v", err))
+		_ = bp.logError(fmt.Sprintf("Failed to set backup params: %v", err))
 		return true
 	}
 	return false
@@ -253,15 +230,15 @@ func (bp *backupParams) handleSetup(r *http.Request) bool {
 // It checks that the DatasetName, TableName, and StorageBucket fields are
 // not empty. If any of these fields are missing, it logs an error and
 // returns false along with the error.
-func checkPostBody(pb *postBodyParams) (bool, error) {
+func (bp *backupParams) checkPostBody(pb *postBodyParams) (bool, error) {
 	if pb.DatasetName == "" {
-		err := logError("Missing DatasetName in Post Body")
+		err := bp.logError("Missing DatasetName in Post Body")
 		return false, err
 	} else if pb.TableName == "" {
-		err := logError("Missing TableName in Post Body")
+		err := bp.logError("Missing TableName in Post Body")
 		return false, err
 	} else if pb.StorageBucket == "" {
-		err := logError("Missing StorageBucket in Post Body")
+		err := bp.logError("Missing StorageBucket in Post Body")
 		return false, err
 	}
 	return true, nil
@@ -314,18 +291,18 @@ func setupExtractor(bp *backupParams) *bigquery.Extractor {
 func (bp *backupParams) validateParams(ctx context.Context) bool {
 	validDataset, err := bp.validateDataset(ctx)
 	if err != nil || !validDataset {
-		_ = logError("Dataset does not exist or is not valid")
+		_ = bp.logError("Dataset does not exist or is not valid")
 		return true
 	}
 
 	validTable, err := bp.validateTable(ctx)
 	if err != nil || !validTable {
-		_ = logError(fmt.Sprintf("Table does not exist or is not valid: %v", err))
+		_ = bp.logError(fmt.Sprintf("Table does not exist or is not valid: %v", err))
 		return true
 	}
 
 	if ok, err := bp.validateStorageBucket(ctx); !ok || err != nil {
-		_ = logError("Problem validating storage bucket")
+		_ = bp.logError("Problem validating storage bucket")
 		return true
 	}
 	return false
@@ -338,7 +315,6 @@ func (bp *backupParams) validateParams(ctx context.Context) bool {
 func (bp *backupParams) validateDataset(ctx context.Context) (bool, error) {
 	ds := bc.Dataset(bp.sourceDatasetID)
 	md, err := ds.Metadata(ctx)
-	defer bc.Close()
 	if err != nil {
 		return false, err
 	}
@@ -355,7 +331,6 @@ func (bp *backupParams) validateDataset(ctx context.Context) (bool, error) {
 func (bp *backupParams) validateTable(ctx context.Context) (bool, error) {
 	md, err := bc.Dataset(bp.sourceDatasetID).Table(bp.backupTableID).Metadata(ctx)
 	fmt.Println(md.FullID)
-	defer bc.Close()
 	if err != nil {
 		return false, err
 	}
@@ -386,15 +361,31 @@ func (bp *backupParams) validateStorageBucket(ctx context.Context) (bool, error)
 
 // logInfo logs an informational message to the "bigquery-backup" logger.
 // The message is logged with the Info severity level.
-func logInfo(msg string) error {
-	lc.Logger("bigquery-backup").Log(logging.Entry{Payload: msg, Severity: logging.Info})
+func (bp *backupParams) logInfo(msg string) error {
+	ctx := context.Background()
+	c, err := logging.NewClient(ctx, bp.projectID)
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
+	defer c.Close()
+	logName := "bigquery-backup"
+	logger := c.Logger(logName).StandardLogger(logging.Info)
+	logger.Println(msg)
 	return nil
 }
 
 // logError logs an error message to the "bigquery-backup" logger.
 // The message is logged with the Error severity level.
-func logError(msg string) error {
-	lc.Logger("bigquery-backup").Log(logging.Entry{Payload: msg, Severity: logging.Error})
+func (bp *backupParams) logError(msg string) error {
+	ctx := context.Background()
+	c, err := logging.NewClient(ctx, bp.projectID)
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
+	defer c.Close()
+	logName := "bigquery-backup"
+	logger := c.Logger(logName).StandardLogger(logging.Error)
+	logger.Println(msg)
 	return nil
 }
 
@@ -441,7 +432,7 @@ func (bp *backupParams) checkBackupFormat() (bool, error) {
 func (bp *backupParams) setCSVAndJSONCompression() error {
 	bp.compressionType = gzipCompression
 	lv := fmt.Sprintf("Backup format: %s, Backup compression: %s", bp.destinationFormat, bp.compressionType)
-	err := logInfo(lv)
+	err := bp.logInfo(lv)
 	if err != nil {
 		return err
 	}
@@ -456,12 +447,12 @@ func (bp *backupParams) setAvroParquetCompression() error {
 	if bp.compressionType == "" {
 		bp.compressionType = snappyCompression
 		lv := fmt.Sprintf("BigQuery Table will be Backup format: %s, Backup compression: %s", bp.destinationFormat, bp.compressionType)
-		err := logInfo(lv)
+		err := bp.logInfo(lv)
 		if err != nil {
 			return err
 		} else if bp.compressionType == deflateCompression || bp.compressionType == snappyCompression {
 			lv := fmt.Sprintf("Backup format: %s, Backup compression: %s", bp.destinationFormat, bp.compressionType)
-			err := logInfo(lv)
+			err := bp.logInfo(lv)
 			if err != nil {
 				return err
 			}

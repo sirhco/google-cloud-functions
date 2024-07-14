@@ -63,54 +63,6 @@ func TestSetBigQueryClientConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
-func TestSetLogger(t *testing.T) {
-	ctx := context.Background()
-
-	tests := []struct {
-		name      string
-		projectID string
-		wantErr   bool
-	}{
-		{
-			name:      "Valid project ID",
-			projectID: "test-project",
-			wantErr:   false,
-		},
-		{
-			name:      "Empty project ID",
-			projectID: "",
-			wantErr:   true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			bp := &backupParams{
-				projectID: tt.projectID,
-			}
-			err := bp.setLogger(ctx)
-			if (err != nil) && tt.wantErr {
-				t.Errorf("setLogger() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestSetLoggerMultipleProjects(t *testing.T) {
-	ctx := context.Background()
-	projects := []string{"project1", "project2", "project3"}
-
-	for _, project := range projects {
-		t.Run(project, func(t *testing.T) {
-			bp := &backupParams{
-				projectID: project,
-			}
-			err := bp.setLogger(ctx)
-			assert.NoError(t, err)
-		})
-	}
-}
-
 func TestSetProjectID(t *testing.T) {
 	tests := []struct {
 		name    string
